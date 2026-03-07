@@ -36,6 +36,10 @@ namespace UnityBridge
         static volatile bool _stopping;
         static volatile bool _listenerDied;
         static int _retryCount;
+        static volatile string _authToken;
+        static string _projectRoot;
+        const string TokenFileName = ".unity-bridge-token";
+        const int MaxRequestBodyBytes = 1_048_576; // 1 MB
 
         const string ShutdownMsg = "Bridge is shutting down";
         const string DeferredSentinel = "__DEFERRED__";
@@ -385,9 +389,10 @@ namespace UnityBridge
             // Cache values that can only be read from main thread
             _unityVersion = Application.unityVersion;
             _productName = Application.productName;
+            _projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
 
             // Restore toggle state (default: on)
-            bool enabled = EditorPrefs.GetBool("UnityBridge.Enabled", true);
+            bool enabled = EditorPrefs.GetBool("UnityBridge.Enabled", false);
             Menu.SetChecked(MenuToggle, enabled);
             // Defer start to next editor update so socket is fully released after domain reload
             // (update runs even when Unity is unfocused, unlike delayCall)
@@ -440,7 +445,7 @@ namespace UnityBridge
         [MenuItem(MenuToggle, priority = 100)]
         static void ToggleEnabled()
         {
-            bool current = EditorPrefs.GetBool("UnityBridge.Enabled", true);
+            bool current = EditorPrefs.GetBool("UnityBridge.Enabled", false);
             bool next = !current;
             EditorPrefs.SetBool("UnityBridge.Enabled", next);
             Menu.SetChecked(MenuToggle, next);
@@ -472,7 +477,7 @@ namespace UnityBridge
         static void StartWithRetry()
         {
             // Respect disabled state (stale RetryTick could fire after toggle)
-            if (!EditorPrefs.GetBool("UnityBridge.Enabled", true)) { _retryCount = 0; return; }
+            if (!EditorPrefs.GetBool("UnityBridge.Enabled", false)) { _retryCount = 0; return; }
             if (_running || _stopping) return;
 
             try
@@ -526,9 +531,16 @@ namespace UnityBridge
             }
             _listener = listener;
             _running = true;
+
+            // Generate per-session auth token and write to project root
+            _authToken = Guid.NewGuid().ToString("N");
+            string tokenPath = Path.Combine(_projectRoot, TokenFileName);
+            try { File.WriteAllText(tokenPath, _authToken); }
+            catch (Exception ex) { Debug.LogWarning($"[UnityBridge] Could not write token file: {ex.Message}"); }
+
             _thread = new Thread(ListenLoop) { IsBackground = true, Name = "UnityBridge" };
             _thread.Start();
-            Debug.Log($"[UnityBridge] Listening on http://localhost:{Port}");
+            Debug.Log($"[UnityBridge] Listening on http://localhost:{Port} (token in {TokenFileName})");
         }
 
         static void Stop(StopReason reason = StopReason.Disabled)
@@ -585,6 +597,14 @@ namespace UnityBridge
 
             // Cancel all pending commands so waiters don't hang
             DrainQueue(ShutdownMsg);
+
+            // Clean up token file
+            try
+            {
+                string tokenPath = Path.Combine(_projectRoot, TokenFileName);
+                if (File.Exists(tokenPath)) File.Delete(tokenPath);
+            }
+            catch { }
 
             Debug.Log("[UnityBridge] Stopped");
         }
@@ -646,16 +666,41 @@ namespace UnityBridge
             var req = ctx.Request;
             var res = ctx.Response;
             res.ContentType = "application/json";
-            // CORS for browser-based tools
-            res.AddHeader("Access-Control-Allow-Origin", "*");
-            res.AddHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-            res.AddHeader("Access-Control-Allow-Headers", "Content-Type");
+            // CORS — restrict to localhost origins only
+            string origin = req.Headers["Origin"];
+            if (!string.IsNullOrEmpty(origin))
+            {
+                try
+                {
+                    var originUri = new Uri(origin);
+                    if (originUri.Host == "localhost" || originUri.Host == "127.0.0.1")
+                    {
+                        res.AddHeader("Access-Control-Allow-Origin", origin);
+                        res.AddHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+                        res.AddHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+                    }
+                }
+                catch { } // malformed origin — no CORS headers
+            }
 
             try
             {
                 if (req.HttpMethod == "OPTIONS")
                 {
                     Respond(res, 200, "{}");
+                    return;
+                }
+
+                // Authenticate: require Bearer token on all requests
+                string authHeader = req.Headers["Authorization"];
+                string token = null;
+                if (authHeader != null && authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+                    token = authHeader.Substring(7).Trim();
+                if (token != _authToken)
+                {
+                    Respond(res, 401, Json.Obj("error",
+                        $"Unauthorized. Set header: Authorization: Bearer <token>. " +
+                        $"Read token from {TokenFileName} in your project root."));
                     return;
                 }
 
@@ -697,9 +742,20 @@ namespace UnityBridge
                         return;
                     }
 
+                    // Enforce body size limit
+                    if (req.ContentLength64 > MaxRequestBodyBytes)
+                    {
+                        Respond(res, 413, Json.Obj("error", "Request body too large (max 1MB)"));
+                        return;
+                    }
                     string body;
                     using (var reader = new StreamReader(req.InputStream, req.ContentEncoding))
                         body = reader.ReadToEnd();
+                    if (body.Length > MaxRequestBodyBytes)
+                    {
+                        Respond(res, 413, Json.Obj("error", "Request body too large (max 1MB)"));
+                        return;
+                    }
 
                     var pending = new PendingCommand(body);
                     _queue.Enqueue(pending);
@@ -752,7 +808,7 @@ namespace UnityBridge
             if (_listenerDied)
             {
                 _listenerDied = false;
-                if (EditorPrefs.GetBool("UnityBridge.Enabled", true) && !_stopping)
+                if (EditorPrefs.GetBool("UnityBridge.Enabled", false) && !_stopping)
                 {
                     Debug.LogWarning("[UnityBridge] Listener died unexpectedly — restarting...");
                     StartWithRetry();
@@ -1747,7 +1803,7 @@ namespace UnityBridge
                         // Sanitize filename
                         if (step.Filename != null)
                         {
-                            step.Filename = step.Filename.Replace("..", "").Replace("/", "").Replace("\\", "");
+                            step.Filename = Path.GetFileName(step.Filename);
                             if (!step.Filename.EndsWith(".png")) step.Filename += ".png";
                         }
                         break;
@@ -1784,6 +1840,19 @@ namespace UnityBridge
             return Bridge.BeginDeferredSequence(state);
         }
 
+        // Blocked namespaces for execute_method (prevents arbitrary OS command execution)
+        static readonly string[] BlockedNamespaces =
+        {
+            "System.Diagnostics",
+            "System.IO",
+            "System.Net",
+            "System.Reflection",
+            "System.Runtime",
+            "System.Security",
+            "System.Threading",
+            "Microsoft.Win32",
+        };
+
         // ── Escape hatch ───────────────────────────────────────
         public static string ExecuteMethod(Dictionary<string, object> p)
         {
@@ -1796,9 +1865,19 @@ namespace UnityBridge
             var type = ResolveType(typeName);
             if (type == null) return Json.Obj("success", false, "error", $"Type not found: {typeName}");
 
+            // Security: block dangerous namespaces
+            string ns = type.Namespace ?? "";
+            foreach (var blocked in BlockedNamespaces)
+            {
+                if (ns.StartsWith(blocked, StringComparison.Ordinal))
+                    return Json.Obj("success", false, "error",
+                        $"Namespace '{ns}' is blocked for security. " +
+                        "execute_method is restricted to Unity and project types.");
+            }
+
             var args = p.GetList("args");
             var argTypeNames = p.GetList("arg_types");
-            var flags = BindingFlags.Public | BindingFlags.Static | BindingFlags.NonPublic;
+            var flags = BindingFlags.Public | BindingFlags.Static;
 
             MethodInfo method;
             if (argTypeNames != null)
@@ -2050,7 +2129,13 @@ namespace UnityBridge
                     string cmdType = cmd.GetStr("type");
                     var cmdParams = cmd.GetDict("params") ?? new Dictionary<string, object>();
 
-                    // refresh cannot be deferred inside batch — use it as a top-level command
+                    // batch and refresh cannot be used inside batch
+                    if (cmdType == "batch")
+                    {
+                        sb.Append(Json.Obj("success", false, "error",
+                            "batch cannot be nested inside batch."));
+                        continue;
+                    }
                     if (cmdType == "refresh")
                     {
                         sb.Append(Json.Obj("success", false, "error",
@@ -2729,7 +2814,7 @@ namespace UnityBridge
             // Concise but complete — every command, param, convention, and workflow pattern.
             return @"{
   ""v"": ""1.0"",
-  ""usage"": ""POST /command with body {type, params}"",
+  ""usage"": ""POST /command with body {type, params}. All requests require header: Authorization: Bearer <token>. Read token from .unity-bridge-token in project root."",
   ""conventions"": {
     ""target"": ""Name ('Player'), hierarchy path ('Env/Props/Barrel'), or instance ID (int, returned by create/find commands)"",
     ""transforms"": ""[x,y,z] arrays. position=world, rotation=euler degrees, scale=local"",
