@@ -3,10 +3,12 @@
 Control Unity Editor with plain HTTP. One file, zero dependencies.
 
 ```bash
-curl http://localhost:7778/command -d '{"type":"create_gameobject","params":{"name":"Cube","primitive_type":"Cube","position":[0,5,0]}}'
+TOKEN=$(cat .unity-bridge-token)
+curl -H "Authorization: Bearer $TOKEN" http://localhost:7778/command \
+  -d '{"type":"create_gameobject","params":{"name":"Cube","primitive_type":"Cube","position":[0,5,0]}}'
 ```
 
-That's it. No MCP, no Python, no WebSocket middleware, no config files. Any tool that speaks HTTP can control Unity.
+No MCP, no Python, no WebSocket middleware, no config files. Any tool that speaks HTTP can control Unity. Auth is a per-session token written to your project root.
 
 ## Why
 
@@ -90,28 +92,37 @@ Or just copy `Editor/UnityBridge.cs` into your project's `Assets/Editor/` folder
 
 ## Quick Start
 
-Bridge starts automatically on `http://localhost:7778`. Toggle via **Tools → Unity Bridge → Enabled**.
+Enable the bridge via **Tools → Unity Bridge → Enabled**. It listens on `http://localhost:7778` and writes an auth token to `.unity-bridge-token` in your project root.
+
+All requests require the token in an `Authorization` header:
 
 ```bash
+# Read the token (once per terminal session)
+export TOKEN=$(cat .unity-bridge-token)
+
 # Is it running?
-curl http://localhost:7778/health
+curl -H "Authorization: Bearer $TOKEN" http://localhost:7778/health
 
 # Create something
-curl localhost:7778/command -d '{"type":"create_gameobject","params":{"name":"Player","primitive_type":"Capsule","position":[0,1,0]}}'
+curl -H "Authorization: Bearer $TOKEN" localhost:7778/command -d '{"type":"create_gameobject","params":{"name":"Player","primitive_type":"Capsule","position":[0,1,0]}}'
 
 # See what's in the scene
-curl localhost:7778/command -d '{"type":"get_hierarchy"}'
+curl -H "Authorization: Bearer $TOKEN" localhost:7778/command -d '{"type":"get_hierarchy"}'
 
 # Poll for events (logs, compile status, play mode changes)
-curl localhost:7778/events?since=0&limit=50
+curl -H "Authorization: Bearer $TOKEN" "localhost:7778/events?since=0&limit=50"
 ```
+
+A new token is generated each time the bridge starts. The token file is deleted on shutdown.
 
 ## For AI Agents
 
 Point your agent to `/api` — it returns a full self-describing schema with every command, every parameter, conventions, and workflow patterns. The agent discovers everything at runtime, no static config needed.
 
+Agents should read `.unity-bridge-token` from the project root and pass it as `Authorization: Bearer <token>` on every request.
+
 ```bash
-curl http://localhost:7778/api
+curl -H "Authorization: Bearer $TOKEN" http://localhost:7778/api
 ```
 
 For the full command reference with examples, see [docs/commands.md](docs/commands.md).
