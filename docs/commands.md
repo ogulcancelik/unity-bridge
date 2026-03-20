@@ -4,6 +4,8 @@ Full reference for every endpoint and command. For a quick overview, see the [RE
 
 AI agents don't need this — they get everything from `GET /api` at runtime. This is for humans who want to browse.
 
+Note: browser-originated requests are intentionally rejected. Use local tools/scripts/agents instead.
+
 ## Endpoints
 
 | Method | Path | Description |

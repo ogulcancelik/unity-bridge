@@ -1,6 +1,6 @@
 {
   "name": "dev.can.unity-bridge",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "displayName": "Unity Bridge",
   "description": "Minimal HTTP bridge for AI-driven Unity Editor control. Single file, no dependencies. Exposes a REST API on localhost for creating/modifying GameObjects, components, scenes, scripts, and more.",
   "unity": "2021.3",

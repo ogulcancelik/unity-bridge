@@ -646,16 +646,21 @@ namespace UnityBridge
             var req = ctx.Request;
             var res = ctx.Response;
             res.ContentType = "application/json";
-            // CORS for browser-based tools
-            res.AddHeader("Access-Control-Allow-Origin", "*");
-            res.AddHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-            res.AddHeader("Access-Control-Allow-Headers", "Content-Type");
 
             try
             {
+                // Reject browser-originated requests. Local CLI/tools typically send no Origin header;
+                // websites do, which closes the main localhost CSRF hole without adding auth/config.
+                if (!string.IsNullOrEmpty(req.Headers["Origin"]))
+                {
+                    Respond(res, 403, Json.Obj("error",
+                        "Browser-originated requests are not allowed. Use a local tool/script instead of a web page."));
+                    return;
+                }
+
                 if (req.HttpMethod == "OPTIONS")
                 {
-                    Respond(res, 200, "{}");
+                    Respond(res, 405, Json.Obj("error", "OPTIONS not supported"));
                     return;
                 }
 

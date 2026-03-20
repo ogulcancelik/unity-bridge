@@ -92,6 +92,8 @@ Or just copy `Editor/UnityBridge.cs` into your project's `Assets/Editor/` folder
 
 Bridge starts automatically on `http://localhost:7778`. Toggle via **Tools → Unity Bridge → Enabled**.
 
+Browser-originated requests are intentionally blocked; use local tools/scripts/agents (`curl`, Pi, Claude Code, etc.), not a web page.
+
 ```bash
 # Is it running?
 curl http://localhost:7778/health
@@ -151,7 +153,7 @@ One C# file. Runs inside the editor. No external processes. All mutations suppor
 
 - **Unity**: 2021.3 LTS and newer (including Unity 6)
 - **Platforms**: Windows, macOS, Linux
-- **Clients**: Anything — Claude Code, Cursor, Windsurf, Pi, custom scripts, browser, `curl`
+- **Clients**: Local tools — Claude Code, Cursor, Windsurf, Pi, custom scripts, `curl`
 
 ## License
 
