@@ -8,20 +8,64 @@ curl http://localhost:7778/command -d '{"type":"create_gameobject","params":{"na
 
 That's it. No MCP, no Python, no WebSocket middleware, no config files. Any tool that speaks HTTP can control Unity.
 
-## Why
+## Quick Start
 
-Existing solutions (MCP for Unity, etc.) require a Python runtime, a WebSocket server, MCP client configuration, and 70,000+ lines of code across 300 files.
-
-Unity Bridge is **1 C# file**. It runs an HTTP server inside the Unity Editor. You send JSON, Unity does the thing.
+**Package Manager** → Add package from git URL:
 
 ```
-MCP approach:   AI → MCP protocol → Python server → WebSocket → Unity plugin
-This approach:  AI → HTTP → Unity
+https://github.com/ogulcancelik/unity-bridge.git
 ```
 
-Works with any AI agent, any CLI tool, any language, any OS. If it has `curl`, it works.
+Or just copy `Editor/UnityBridge.cs` into your project's `Assets/Editor/` folder. Same thing.
 
-## Comparison
+Bridge starts automatically on `http://localhost:7778`. Toggle via **Tools → Unity Bridge → Enabled**.
+
+```bash
+# Is it running?
+curl http://localhost:7778/health
+
+# Create something
+curl localhost:7778/command -d '{"type":"create_gameobject","params":{"name":"Player","primitive_type":"Capsule","position":[0,1,0]}}'
+
+# See what's in the scene
+curl localhost:7778/command -d '{"type":"get_hierarchy"}'
+```
+
+## AI Agents
+
+Tell your agent:
+
+```
+curl http://localhost:7778/api
+```
+
+That returns a self-describing schema — every command, every parameter, conventions, workflow patterns. The agent reads it, understands the API, and starts controlling Unity with curl. No tools to install, no config, no protocol.
+
+To make it persistent, add to your project's `AGENTS.md` or `CLAUDE.md`:
+
+```markdown
+## Unity
+
+Unity Bridge is running at localhost:7778 — it lets you control the Unity Editor over HTTP.
+
+Run `curl http://localhost:7778/api` to get the full API schema with every command,
+parameter, and convention. Use curl to send commands.
+```
+
+Or just mention it at the start of a conversation. Either way, one curl is the entire onboarding.
+
+## How It's Different
+
+MCP servers push tools into your agent's context at connection time. The agent sees them as native capabilities — but you need to install the server, configure the client, keep a sidecar process running, and those tool definitions live in context permanently.
+
+Unity Bridge flips this. There's nothing to install on the agent side. The agent pulls the schema with one HTTP call when it needs it, then talks plain HTTP. No special protocol, no tool registration, no permanent context cost.
+
+```
+MCP:    install server → configure client → tools injected into context → agent calls tools
+Bridge: agent curls /api → reads schema → agent curls /command
+```
+
+### vs Unity MCP
 
 vs [Unity MCP](https://github.com/CoplayDev/unity-mcp) (the most popular MCP-based solution):
 
@@ -78,46 +122,6 @@ Between these two and the core CRUD commands, there's nothing an agent can't do.
 
 The trade-off is intentional: **2,816 lines that cover everything** vs 60,000+ lines that cover specific subsystems with nicer ergonomics. We'd rather ship a small, reliable tool that agents can compose freely than maintain wrappers for every corner of Unity.
 
-## Install
-
-**Package Manager** → Add package from git URL:
-
-```
-https://github.com/ogulcancelik/unity-bridge.git
-```
-
-Or just copy `Editor/UnityBridge.cs` into your project's `Assets/Editor/` folder. Same thing.
-
-## Quick Start
-
-Bridge starts automatically on `http://localhost:7778`. Toggle via **Tools → Unity Bridge → Enabled**.
-
-Browser-originated requests are intentionally blocked; use local tools/scripts/agents (`curl`, Pi, Claude Code, etc.), not a web page.
-
-```bash
-# Is it running?
-curl http://localhost:7778/health
-
-# Create something
-curl localhost:7778/command -d '{"type":"create_gameobject","params":{"name":"Player","primitive_type":"Capsule","position":[0,1,0]}}'
-
-# See what's in the scene
-curl localhost:7778/command -d '{"type":"get_hierarchy"}'
-
-# Poll for events (logs, compile status, play mode changes)
-curl localhost:7778/events?since=0&limit=50
-```
-
-## For AI Agents
-
-Point your agent to `/api` — it returns a full self-describing schema with every command, every parameter, conventions, and workflow patterns. The agent discovers everything at runtime, no static config needed.
-
-```bash
-curl http://localhost:7778/api
-```
-
-For the full command reference with examples, see [docs/commands.md](docs/commands.md).
-
 ## Commands
 
 | Category | Commands |
@@ -132,6 +136,8 @@ For the full command reference with examples, see [docs/commands.md](docs/comman
 | **Project** | `get_project_info`, `get_tags`, `get_layers`, `add_tag`, `add_layer` |
 | **Prefabs** | `create_prefab`, `instantiate_prefab` |
 | **Utility** | `batch`, `execute_method` |
+
+For the full command reference with examples, see [docs/commands.md](docs/commands.md).
 
 ## Architecture
 
